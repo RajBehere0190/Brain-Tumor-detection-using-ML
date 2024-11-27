@@ -1,1 +1,1 @@
-# Brain-Tumor-detection-using-ML
+This application is designed for data analysis and machine learning using Python, focusing on brain tumor MRI datasets. It includes essential package installations, data preprocessing, and visualization techniques to enhance understanding of the dataset. Users can build and evaluate machine learning models effectively within this framework.
