@@ -1,0 +1,150 @@
+import streamlit as st
+import numpy as np
+import cv2
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+
+# Define and register custom loss functions
+@tf.keras.utils.register_keras_serializable()
+def weighted_dice_loss(y_true, y_pred, weight=1.0, smooth=1e-6):
+    y_true_f = tf.keras.backend.flatten(y_true)
+    y_pred_f = tf.keras.backend.flatten(y_pred)
+    intersection = tf.reduce_sum(y_true_f * y_pred_f)
+    return 1 - (2. * intersection + smooth) / (weight * (tf.reduce_sum(y_true_f) + tf.reduce_sum(y_pred_f) + smooth))
+
+@tf.keras.utils.register_keras_serializable()
+def bce_dice_loss(y_true, y_pred):
+    bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+    dice = weighted_dice_loss(y_true, y_pred)
+    return bce + dice
+
+@tf.keras.utils.register_keras_serializable()
+def combined_loss(y_true, y_pred):
+    # Use your own logic for combined loss
+    return bce_dice_loss(y_true, y_pred)  # Adjust as needed
+
+# Load classification and segmentation models
+classification_model = load_model("best_model_so_far.keras")
+segmentation_model = load_model("unet.keras", custom_objects={
+    'bce_dice_loss': bce_dice_loss,
+    'weighted_dice_loss': weighted_dice_loss,
+    'combined_loss': combined_loss  # Add combined_loss here
+})
+
+# Class labels
+class_names = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
+
+# Preprocess functions
+def preprocess_for_classification(image):
+    image_resized = cv2.resize(image, (224, 224))
+    return np.expand_dims(image_resized / 255.0, axis=0)
+
+def preprocess_for_segmentation(image):
+    image_resized = cv2.resize(image, (256, 256))
+    return np.expand_dims(image_resized / 255.0, axis=0)
+
+def classify_image(image):
+    preprocessed_image = preprocess_for_classification(image)
+    predictions = classification_model.predict(preprocessed_image)
+    return np.argmax(predictions, axis=1)[0]
+
+def segment_image(image):
+    preprocessed_image = preprocess_for_segmentation(image)
+    mask_prediction = segmentation_model.predict(preprocessed_image)
+    mask = (mask_prediction[0] > 0.5).astype(np.uint8)
+    return mask
+
+# Streamlit app layout
+st.markdown("<h1 style='text-align: center; color: #2e86c1;'>Brain Tumor Classification and Segmentation</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; font-size: 18px; color: #34495e;'>Upload a Brain MRI image to classify and segment it if applicable.</p>", unsafe_allow_html=True)
+
+# Custom sidebar styles
+st.markdown("""
+    <style>
+        .sidebar .sidebar-content {
+            background-color: #f2f2f2; /* Lighter background for the sidebar */
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }
+        .sidebar h2 {
+            font-size: 26px; /* Increased font size for better visibility */
+            color: #2e86c1; /* Title color */
+        }
+        .sidebar .stButton>button {
+            background-color: #2e86c1; /* Button color */
+            color: white; /* Button text color */
+            border-radius: 8px; /* Rounded corners */
+            border: none; /* No border */
+            padding: 10px 20px; /* Padding for the button */
+            transition: background-color 0.3s; /* Smooth transition */
+        }
+        .sidebar .stButton>button:hover {
+            background-color: #1c6691; /* Darker shade on hover */
+        }
+        .stFileUploader {
+            background-color: #e7f0ff; /* Light blue background for file uploader */
+            border: 2px dashed #2e86c1; /* Dashed border */
+            border-radius: 8px; /* Rounded corners */
+            padding: 20px; /* Padding inside uploader */
+            text-align: center; /* Center text */
+            color: #34495e; /* Text color */
+            font-weight: bold; /* Bold text */
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Sidebar for image upload
+st.sidebar.title("Upload Image")
+uploaded_file = st.sidebar.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    image = cv2.imdecode(np.frombuffer(uploaded_file.read(), np.uint8), cv2.IMREAD_COLOR)
+    st.image(image, channels="BGR", caption="Uploaded Image", use_column_width=True)
+
+    # Classify the image
+    with st.spinner('Classifying...'):
+        label_index = classify_image(image)
+    st.markdown(f"<h2 style='text-align: center; color: #28a745;'>Classification: {class_names[label_index]}</h2>", unsafe_allow_html=True)
+
+    # Perform segmentation if the class is not "No Tumor"
+    if class_names[label_index] != "No Tumor":
+        st.markdown("<h3 style='text-align: center; color: #e67e22;'>Segmenting Tumor Region...</h3>", unsafe_allow_html=True)
+        
+        with st.spinner('Segmenting...'):
+            mask = segment_image(image)
+
+        mask_resized = cv2.resize(mask, (image.shape[1], image.shape[0]))
+        overlay = np.zeros_like(image)
+        overlay[mask_resized == 1] = [0, 0, 255]  # Red mask
+        transparent_overlay = cv2.addWeighted(image, 1.0, overlay, 0.4, 0)
+        st.image(transparent_overlay, channels="BGR", caption="Tumor Segmentation Overlay", use_column_width=True)
+
+# Footer styling
+st.markdown("""
+    <style>
+        footer {visibility: hidden;}
+        .footer {
+            position: fixed;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background-color: #f1f1f1;
+            color: black;
+            text-align: center;
+            padding: 10px;
+        }
+    </style>
+    <div class="footer">
+        <p>Powered by Brain Tumor Classifier and Segmenter</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Add a background color to the app
+st.markdown("""
+    <style>
+        .stApp {
+            background-color: #ecf0f1;
+        }
+    </style>
+    """, unsafe_allow_html=True)
